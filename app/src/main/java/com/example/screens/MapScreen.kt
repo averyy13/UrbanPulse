@@ -34,6 +34,7 @@ import org.osmdroid.config.Configuration
 import org.osmdroid.util.GeoPoint
 import org.osmdroid.views.MapView
 import org.osmdroid.views.overlay.Marker
+import android.widget.Toast
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -52,7 +53,7 @@ fun MapScreen(
     var selectedPriorityFilter by remember { mutableStateOf("All") }
     var selectedStatusFilter by remember { mutableStateOf("All") }
 
-    val categoriesList = listOf("All", "Pothole", "Light Out", "Waste", "Water Leak", "Road Sign", "Other")
+    val categoriesList = listOf("All", "Flooding", "Pothole", "Road Damage", "Broken Streetlight", "Garbage", "Drainage Problem", "Other")
     val prioritiesList = listOf("All", "Critical", "High", "Medium", "Low")
     val statusesList = listOf("All", "Pending", "Reviewing", "Fixed")
 
@@ -87,6 +88,18 @@ fun MapScreen(
                 title = { Text("Neighborhood Heatmap", fontWeight = FontWeight.Bold, fontSize = 20.sp) },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.background),
                 actions = {
+                    // IconButton(onClick = {
+                    //     Toast.makeText(context, "Seeding heatmap demo data...", Toast.LENGTH_SHORT).show()
+                    //     viewModel.seedHeatmapDemoData { result ->
+                    //         if (result.isSuccess) {
+                    //             Toast.makeText(context, "Heatmap demo data seeded successfully!", Toast.LENGTH_LONG).show()
+                    //         } else {
+                    //             Toast.makeText(context, "Failed to seed demo data: ${result.exceptionOrNull()?.message}", Toast.LENGTH_LONG).show()
+                    //         }
+                    //     }
+                    // }) {
+                    //     Icon(Icons.Default.Science, contentDescription = "Seed Heatmap Demo Data", tint = MaterialTheme.colorScheme.primary)
+                    // }
                     IconButton(onClick = onNavigateToReport) {
                         Icon(Icons.Default.AddLocationAlt, contentDescription = "Report Location", tint = MaterialTheme.colorScheme.primary)
                     }
@@ -199,15 +212,39 @@ fun MapScreen(
             }
 
             // Map View container
+            var mapViewInstance by remember { mutableStateOf<MapView?>(null) }
+            
+            LaunchedEffect(filteredIssues) {
+                val map = mapViewInstance ?: return@LaunchedEffect
+                if (filteredIssues.isNotEmpty()) {
+                    if (filteredIssues.size == 1) {
+                        map.controller.setCenter(GeoPoint(filteredIssues[0].latitude, filteredIssues[0].longitude))
+                        map.controller.setZoom(16.0)
+                    } else {
+                        var minLat = Double.MAX_VALUE
+                        var maxLat = -Double.MAX_VALUE
+                        var minLng = Double.MAX_VALUE
+                        var maxLng = -Double.MAX_VALUE
+                        filteredIssues.forEach { issue ->
+                            if (issue.latitude < minLat) minLat = issue.latitude
+                            if (issue.latitude > maxLat) maxLat = issue.latitude
+                            if (issue.longitude < minLng) minLng = issue.longitude
+                            if (issue.longitude > maxLng) maxLng = issue.longitude
+                        }
+                        val padding = 0.01 // Add some padding around the bounding box
+                        val boundingBox = org.osmdroid.util.BoundingBox(maxLat + padding, maxLng + padding, minLat - padding, minLng - padding)
+                        map.zoomToBoundingBox(boundingBox, true, 100)
+                    }
+                }
+            }
+
             Box(modifier = Modifier.weight(1f)) {
                 AndroidView(
                     modifier = Modifier.fillMaxSize(),
                     factory = { ctx ->
                         MapView(ctx).apply {
                             setMultiTouchControls(true)
-                            controller.setZoom(14.5)
-                            // Focus map on SF Center
-                            controller.setCenter(GeoPoint(37.7749, -122.4194))
+                            mapViewInstance = this
                         }
                     },
                     update = { mapView ->
@@ -219,9 +256,53 @@ fun MapScreen(
                             val marker = Marker(mapView).apply {
                                 position = GeoPoint(issue.latitude, issue.longitude)
                                 setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM)
-                                title = issue.title
-                                snippet = "${issue.category} • ${issue.status.uppercase()}"
                                 
+                                val composeView = androidx.compose.ui.platform.ComposeView(context).apply {
+                                    setContent {
+                                        MaterialTheme {
+                                            val dateFormat = java.text.SimpleDateFormat("MMM dd, yyyy", java.util.Locale.getDefault())
+                                            val dateStr = dateFormat.format(java.util.Date(issue.timestamp))
+                                            Card(
+                                                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                                                shape = RoundedCornerShape(12.dp),
+                                                elevation = CardDefaults.cardElevation(defaultElevation = 4.dp),
+                                                modifier = Modifier.padding(bottom = 8.dp).width(220.dp)
+                                            ) {
+                                                Column(modifier = Modifier.padding(12.dp)) {
+                                                    Text(issue.category, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                                                    Spacer(modifier = Modifier.height(4.dp))
+                                                    Text(issue.description, fontSize = 12.sp, maxLines = 2, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
+                                                    Spacer(modifier = Modifier.height(8.dp))
+                                                    Text(issue.address, fontSize = 10.sp, color = MaterialTheme.colorScheme.secondary, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
+                                                    Spacer(modifier = Modifier.height(4.dp))
+                                                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                                                        Text("Votes: ${issue.votes}", fontSize = 10.sp, color = MaterialTheme.colorScheme.secondary)
+                                                        Text(issue.status, fontSize = 10.sp, color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold)
+                                                    }
+                                                    Text("Reported: $dateStr", fontSize = 10.sp, color = MaterialTheme.colorScheme.secondary)
+                                                    Spacer(modifier = Modifier.height(8.dp))
+                                                    Button(
+                                                        onClick = { 
+                                                            closeInfoWindow()
+                                                            onNavigateToDetails(issue.id) 
+                                                        },
+                                                        modifier = Modifier.fillMaxWidth().height(32.dp),
+                                                        shape = RoundedCornerShape(8.dp),
+                                                        contentPadding = PaddingValues(0.dp)
+                                                    ) {
+                                                        Text("View Details", fontSize = 11.sp)
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                                val customInfoWindow = object : org.osmdroid.views.overlay.infowindow.InfoWindow(composeView, mapView) {
+                                    override fun onOpen(item: Any?) {}
+                                    override fun onClose() {}
+                                }
+                                infoWindow = customInfoWindow
+
                                 // Generate colored dot pin programmatically based on priorityScore
                                 val androidColorInt = when {
                                     issue.priorityScore >= 3 -> AndroidColor.RED // Critical
@@ -232,9 +313,8 @@ fun MapScreen(
                                 icon = createCustomMarkerIcon(context, androidColorInt)
 
                                 setOnMarkerClickListener { m, _ ->
+                                    mapView.overlays.filterIsInstance<Marker>().forEach { it.closeInfoWindow() }
                                     m.showInfoWindow()
-                                    // Clicking marker or info window navigates directly to Report Details
-                                    onNavigateToDetails(issue.id)
                                     true
                                 }
                             }

@@ -13,6 +13,8 @@ interface AuthRepository {
     suspend fun register(name: String, email: String, password: String): Result<FirebaseUser>
     suspend fun sendPasswordResetEmail(email: String): Result<Unit>
     suspend fun logout(): Result<Unit>
+    suspend fun updateDisplayName(name: String): Result<Unit>
+    suspend fun deleteAccount(): Result<Unit>
 }
 
 class AuthRepositoryImpl(
@@ -118,6 +120,51 @@ class AuthRepositoryImpl(
         val auth = firebaseAuth ?: return Result.success(Unit) // If null, we are already effectively signed out
         return try {
             auth.signOut()
+            Result.success(Unit)
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    override suspend fun updateDisplayName(name: String): Result<Unit> {
+        val auth = firebaseAuth
+        if (auth == null || auth.currentUser == null) {
+            return Result.failure(Exception("Firebase is not initialized or user is not logged in"))
+        }
+        return try {
+            val user = auth.currentUser!!
+            val profileUpdates = com.google.firebase.auth.UserProfileChangeRequest.Builder()
+                .setDisplayName(name)
+                .build()
+            user.updateProfile(profileUpdates).await()
+            // Also update in Firestore if possible
+            try {
+                userRepository.updateUser(
+                    com.example.model.User(
+                        uid = user.uid,
+                        fullName = name,
+                        email = user.email ?: "",
+                        createdAt = System.currentTimeMillis(),
+                        reportCount = 0
+                    )
+                )
+            } catch (e: Exception) {
+                // Non-critical
+            }
+            Result.success(Unit)
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    override suspend fun deleteAccount(): Result<Unit> {
+        val auth = firebaseAuth
+        if (auth == null || auth.currentUser == null) {
+            return Result.failure(Exception("Firebase is not initialized or user is not logged in"))
+        }
+        return try {
+            val user = auth.currentUser!!
+            user.delete().await()
             Result.success(Unit)
         } catch (e: Exception) {
             Result.failure(e)

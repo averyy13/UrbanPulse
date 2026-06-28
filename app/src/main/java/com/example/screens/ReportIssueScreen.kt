@@ -16,6 +16,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -120,11 +121,11 @@ fun ReportIssueScreen(
     var isMapSelectionOpen by remember { mutableStateOf(false) }
 
     // Dropdown Categories
-    val categories = listOf("Pothole", "Light Out", "Waste", "Water Leak", "Road Sign", "Other")
+    val categories = listOf("Flooding", "Pothole", "Road Damage", "Broken Streetlight", "Garbage", "Drainage Problem", "Other")
 
     // Auth details
     val authState by authViewModel.authState.collectAsState()
-    val userId = if (authState is AuthState.Success) (authState as AuthState.Success).email else "anonymous"
+    val userId = if (authState is AuthState.Success) (authState as AuthState.Success).uid else "anonymous"
     val userName = if (authState is AuthState.Success) {
         (authState as AuthState.Success).displayName ?: "Active Citizen"
     } else {
@@ -183,11 +184,7 @@ fun ReportIssueScreen(
                     address = getAddressFromLatLng(context, loc.latitude, loc.longitude)
                     Toast.makeText(context, "Location updated: ${loc.latitude}, ${loc.longitude}", Toast.LENGTH_SHORT).show()
                 } else {
-                    // Fallback to SF downtown inside mock simulation safely
-                    latitude = 37.7749
-                    longitude = -122.4194
-                    address = getAddressFromLatLng(context, 37.7749, -122.4194)
-                    Toast.makeText(context, "Using default location coordinates.", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(context, "Location not found. Please enable GPS.", Toast.LENGTH_SHORT).show()
                 }
             }
         } else {
@@ -414,14 +411,16 @@ fun ReportIssueScreen(
                             modifier = Modifier.padding(top = 4.dp)
                         )
                         Row(
-                            modifier = Modifier.fillMaxWidth(),
+                            modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
                             horizontalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
                             val presetPhotos = listOf(
-                                "Pothole" to "https://images.unsplash.com/photo-1515162305285-0293e4767cc2?auto=format&fit=crop&q=80&w=400",
-                                "Broken Light" to "https://images.unsplash.com/photo-1509198397868-475647b2a1e5?auto=format&fit=crop&q=80&w=400",
-                                "Waste" to "https://images.unsplash.com/photo-1611284446314-60a58ac0deb9?auto=format&fit=crop&q=80&w=400",
-                                "Water Leak" to "https://images.unsplash.com/photo-1504328345606-18bbc8c9d7d1?auto=format&fit=crop&q=80&w=400"
+                                "Flooding" to "https://images.unsplash.com/photo-1547683905-f686c993aae5?auto=format&fit=crop&q=80&w=400",
+                                "Pothole" to "https://media.istockphoto.com/id/174662203/photo/pot-hole.webp?a=1&b=1&s=612x612&w=0&k=20&c=yaf-icnDIlpR4sUD_hsJuB1x0z8bTsxUbl8xhh84niU=",
+                                "Road Damage" to "https://media.istockphoto.com/id/465027686/nl/foto/asphalt-cracked-road-collapsed.jpg?s=612x612&w=0&k=20&c=ALYOwRa72rXxa1Z0VcLhZszhfMgmK1p_7rVxw6YX-WQ=",
+                                "Broken Streetlight" to "https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcRbmbQ3lQmQxobiEaGy-sIMJ6GdpBnq2c2vsCS5gT37yA&s=10",
+                                "Garbage" to "https://images.unsplash.com/flagged/photo-1572213426852-0e4ed8f41ff6?q=80&w=2074&auto=format&fit=crop&ixlib=rb-4.1.0&ixid=M3wxMjA3fDB8MHxwaG90by1wYWdlfHx8fGVufDB8fHx8fA%3D%3D",
+                                "Drainage Problem" to "https://www.mapsofindia.com/ci-moi-images/my-india/2014/12/sewage.jpg"
                             )
                             presetPhotos.forEach { (label, url) ->
                                 val isSelected = selectedPresetUrl == url
@@ -430,22 +429,25 @@ fun ReportIssueScreen(
                                     shape = RoundedCornerShape(8.dp),
                                     border = borderStroke,
                                     modifier = Modifier
-                                        .weight(1.5f)
+                                        .width(130.dp)
                                         .clickable {
                                             selectedPresetUrl = url
                                             selectedImageUri = null
                                             capturedBitmap = null
-                                            if (label == "Broken Light") {
-                                                category = "Light Out"
-                                            } else {
-                                                category = label
-                                            }
+                                            category = label
                                         }
                                         .testTag("preset_card_$label"),
                                     colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
                                 ) {
                                     Box(modifier = Modifier.fillMaxWidth().height(44.dp), contentAlignment = Alignment.Center) {
-                                        Text(label, fontSize = 10.sp, fontWeight = FontWeight.SemiBold, color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface)
+                                        Text(
+                                            text = label,
+                                            fontSize = 10.sp,
+                                            fontWeight = FontWeight.SemiBold,
+                                            color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+                                            textAlign = TextAlign.Center,
+                                            modifier = Modifier.padding(horizontal = 4.dp)
+                                        )
                                     }
                                 }
                             }

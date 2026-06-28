@@ -33,6 +33,8 @@ fun HomeScreen(
     onNavigateToProfile: () -> Unit,
     onNavigateToDetails: (String) -> Unit,
     onNavigateToMap: () -> Unit,
+    onNavigateToNotifications: () -> Unit = {},
+    unreadNotificationCount: Int = 0,
     viewModel: IssueViewModel
 ) {
     val issues by viewModel.issues.collectAsState()
@@ -46,6 +48,18 @@ fun HomeScreen(
                     Text("UrbanPulse Feed", fontWeight = FontWeight.Bold, fontSize = 20.sp)
                 },
                 actions = {
+                    IconButton(onClick = onNavigateToNotifications) {
+                        Box {
+                            Icon(androidx.compose.material.icons.Icons.Default.Notifications, contentDescription = "Notifications", tint = MaterialTheme.colorScheme.primary)
+                            if (unreadNotificationCount > 0) {
+                                Badge(
+                                    modifier = Modifier.align(Alignment.TopEnd)
+                                ) {
+                                    Text(unreadNotificationCount.toString())
+                                }
+                            }
+                        }
+                    }
                     // Pull-to-refresh action button in TopBar for easy, failsafe simulator access
                     IconButton(onClick = { viewModel.refreshIssues() }) {
                         Icon(Icons.Default.Refresh, contentDescription = "Refresh", tint = MaterialTheme.colorScheme.primary)

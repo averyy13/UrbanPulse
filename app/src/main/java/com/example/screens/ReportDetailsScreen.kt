@@ -55,7 +55,8 @@ fun ReportDetailsScreen(
     val selectedIssue by issueViewModel.selectedIssue.collectAsState()
     val authState by authViewModel.authState.collectAsState()
 
-    val currentUserId = if (authState is AuthState.Success) (authState as AuthState.Success).email else "anonymous"
+    val currentUserId = if (authState is AuthState.Success) (authState as AuthState.Success).uid else "anonymous"
+    val currentUserEmail = if (authState is AuthState.Success) (authState as AuthState.Success).email else ""
     val currentUserName = if (authState is AuthState.Success) {
         (authState as AuthState.Success).displayName ?: "Active Citizen"
     } else {
@@ -431,7 +432,7 @@ fun ReportDetailsScreen(
                             }
                             
                             // Edit and Delete buttons for reporter if Pending
-                            if (issue.reporterId == currentUserId && issue.status.equals("Pending", ignoreCase = true)) {
+                            if ((issue.reporterId == currentUserId || issue.reporterId.equals(currentUserEmail, ignoreCase = true)) && issue.status.equals("Pending", ignoreCase = true)) {
                                 Row(
                                     modifier = Modifier.fillMaxWidth(),
                                     horizontalArrangement = Arrangement.spacedBy(12.dp)

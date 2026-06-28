@@ -4,6 +4,8 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -31,6 +33,8 @@ fun ProfileScreen(
     onNavigateBack: () -> Unit,
     onNavigateToLogin: () -> Unit,
     onNavigateToMyReports: () -> Unit,
+    onNavigateToSettings: () -> Unit,
+    onNavigateToHelp: () -> Unit,
     viewModel: AuthViewModel,
     issueViewModel: IssueViewModel
 ) {
@@ -46,6 +50,7 @@ fun ProfileScreen(
     }
 
     val email = if (authState is AuthState.Success) (authState as AuthState.Success).email else "citizen@urbanpulse.org"
+    val uid = if (authState is AuthState.Success) (authState as AuthState.Success).uid else ""
     val displayName = if (authState is AuthState.Success) {
         (authState as AuthState.Success).displayName ?: "Active Citizen"
     } else {
@@ -53,11 +58,11 @@ fun ProfileScreen(
     }
 
     // Dynamic metrics calculation
-    val myReportsCount = remember(issues, email) {
-        issues.count { it.reporterId.equals(email, ignoreCase = true) }
+    val myReportsCount = remember(issues, email, uid) {
+        issues.count { it.reporterId.equals(email, ignoreCase = true) || it.reporterId == uid }
     }
-    val myUpvotesReceived = remember(issues, email) {
-        issues.filter { it.reporterId.equals(email, ignoreCase = true) }.sumOf { it.votes }
+    val myUpvotesReceived = remember(issues, email, uid) {
+        issues.filter { it.reporterId.equals(email, ignoreCase = true) || it.reporterId == uid }.sumOf { it.votes }
     }
     val userRank = remember(myReportsCount) {
         when {
@@ -66,6 +71,26 @@ fun ProfileScreen(
             myReportsCount >= 1 -> "Active Guardian"
             else -> "Apprentice Watch"
         }
+    }
+
+    // Contribution data for the last 30 days
+    val contributionData = remember(issues, email, uid) {
+        val thirtyDaysAgo = System.currentTimeMillis() - 30L * 24 * 60 * 60 * 1000
+        val myRecentIssues = issues.filter { 
+            (it.reporterId.equals(email, ignoreCase = true) || it.reporterId == uid) && 
+            it.timestamp >= thirtyDaysAgo 
+        }
+        
+        // Group by day (0 to 29)
+        val dailyCounts = IntArray(30) { 0 }
+        myRecentIssues.forEach { issue ->
+            val daysAgo = ((System.currentTimeMillis() - issue.timestamp) / (24 * 60 * 60 * 1000)).toInt()
+            if (daysAgo in 0..29) {
+                // Reverse index so 0 is oldest, 29 is today
+                dailyCounts[29 - daysAgo]++
+            }
+        }
+        dailyCounts.toList()
     }
 
     Scaffold(
@@ -82,10 +107,12 @@ fun ProfileScreen(
             )
         }
     ) { padding ->
+        val scrollState = rememberScrollState()
         Column(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding)
+                .verticalScroll(scrollState)
                 .padding(horizontal = 24.dp, vertical = 12.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(20.dp)
@@ -177,6 +204,22 @@ fun ProfileScreen(
                 }
             }
 
+            Spacer(modifier = Modifier.height(8.dp))
+
+            // Chart Dashboard
+            Card(
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                shape = RoundedCornerShape(20.dp),
+                elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Box(modifier = Modifier.padding(16.dp)) {
+                    com.example.components.ContributionsBarChart(data = contributionData)
+                }
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+
             // Interactive Profile options list
             Card(
                 colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
@@ -187,13 +230,13 @@ fun ProfileScreen(
                 Column {
                     ProfileOptionItem(icon = Icons.Default.List, title = "My Reports", onClick = onNavigateToMyReports)
                     HorizontalDivider(color = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.5f))
-                    ProfileOptionItem(icon = Icons.Default.Settings, title = "Settings")
+                    ProfileOptionItem(icon = Icons.Default.Settings, title = "Settings", onClick = onNavigateToSettings)
                     HorizontalDivider(color = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.5f))
-                    ProfileOptionItem(icon = Icons.Default.Info, title = "Help & Support")
+                    ProfileOptionItem(icon = Icons.Default.Info, title = "Help & Support", onClick = onNavigateToHelp)
                 }
             }
 
-            Spacer(modifier = Modifier.weight(1f))
+            Spacer(modifier = Modifier.height(16.dp))
 
             // Prominent Logout Button
             Button(

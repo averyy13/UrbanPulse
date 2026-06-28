@@ -13,7 +13,7 @@ import kotlinx.coroutines.launch
 sealed class AuthState {
     object Initial : AuthState()
     object Loading : AuthState()
-    data class Success(val email: String, val displayName: String?) : AuthState()
+    data class Success(val uid: String, val email: String, val displayName: String?) : AuthState()
     data class Error(val message: String) : AuthState()
 }
 
@@ -34,9 +34,9 @@ class AuthViewModel(
         viewModelScope.launch {
             repository.observeAuthState().collect { user ->
                 if (user != null) {
-                    _authState.value = AuthState.Success(user.email ?: "", user.displayName)
+                    _authState.value = AuthState.Success(user.uid, user.email ?: "", user.displayName)
                 } else if (_isDemoMode.value && _demoUserEmail.value != null) {
-                    _authState.value = AuthState.Success(_demoUserEmail.value!!, "Demo Citizen")
+                    _authState.value = AuthState.Success("demo_user_id", _demoUserEmail.value!!, "Demo Citizen")
                 } else {
                     _authState.value = AuthState.Initial
                 }
@@ -59,13 +59,13 @@ class AuthViewModel(
             val result = repository.login(email, password)
             result.onSuccess { user ->
                 _isDemoMode.value = false
-                _authState.value = AuthState.Success(user.email ?: "", user.displayName)
+                _authState.value = AuthState.Success(user.uid, user.email ?: "", user.displayName)
             }.onFailure { error ->
                 // Enable demo fallback automatically if Firebase is uninitialized
                 if (error.message?.contains("Firebase is not initialized") == true) {
                     _isDemoMode.value = true
                     _demoUserEmail.value = email
-                    _authState.value = AuthState.Success(email, "Demo Citizen (Sandbox)")
+                    _authState.value = AuthState.Success("demo_user_id", email, "Demo Citizen (Sandbox)")
                 } else {
                     _authState.value = AuthState.Error(error.localizedMessage ?: "Login failed")
                 }
@@ -100,12 +100,12 @@ class AuthViewModel(
             val result = repository.register(name, email, password)
             result.onSuccess { user ->
                 _isDemoMode.value = false
-                _authState.value = AuthState.Success(user.email ?: "", name)
+                _authState.value = AuthState.Success(user.uid, user.email ?: "", name)
             }.onFailure { error ->
                 if (error.message?.contains("Firebase is not initialized") == true) {
                     _isDemoMode.value = true
                     _demoUserEmail.value = email
-                    _authState.value = AuthState.Success(email, "$name (Sandbox)")
+                    _authState.value = AuthState.Success("demo_user_id", email, "$name (Sandbox)")
                 } else {
                     _authState.value = AuthState.Error(error.localizedMessage ?: "Registration failed")
                 }
@@ -143,6 +143,46 @@ class AuthViewModel(
             _isDemoMode.value = false
             _demoUserEmail.value = null
             _authState.value = AuthState.Initial
+        }
+    }
+
+    fun updateDisplayName(name: String, onComplete: (Result<Unit>) -> Unit) {
+        viewModelScope.launch {
+            if (_isDemoMode.value) {
+                // In demo mode, simulate success and update local state
+                val currentState = _authState.value
+                if (currentState is AuthState.Success) {
+                    _authState.value = currentState.copy(displayName = name)
+                }
+                onComplete(Result.success(Unit))
+            } else {
+                val result = repository.updateDisplayName(name)
+                result.onSuccess {
+                    val currentState = _authState.value
+                    if (currentState is AuthState.Success) {
+                        _authState.value = currentState.copy(displayName = name)
+                    }
+                }
+                onComplete(result)
+            }
+        }
+    }
+
+    fun deleteAccount(onComplete: (Result<Unit>) -> Unit) {
+        viewModelScope.launch {
+            if (_isDemoMode.value) {
+                // In demo mode, simulate success and reset state
+                _isDemoMode.value = false
+                _demoUserEmail.value = null
+                _authState.value = AuthState.Initial
+                onComplete(Result.success(Unit))
+            } else {
+                val result = repository.deleteAccount()
+                result.onSuccess {
+                    _authState.value = AuthState.Initial
+                }
+                onComplete(result)
+            }
         }
     }
 

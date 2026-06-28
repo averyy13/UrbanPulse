@@ -9,6 +9,8 @@ interface ReportRepository {
     suspend fun getReports(): Result<List<Report>>
     suspend fun updateReport(report: Report): Result<Unit>
     suspend fun deleteReport(reportId: String): Result<Unit>
+    fun observeReports(): kotlinx.coroutines.flow.Flow<List<Report>>
+    suspend fun seedHeatmapDemoData(): Result<Unit>
 }
 
 class ReportRepositoryImpl(
@@ -19,4 +21,6 @@ class ReportRepositoryImpl(
     override suspend fun getReports(): Result<List<Report>> = firestoreService.getReports()
     override suspend fun updateReport(report: Report): Result<Unit> = firestoreService.updateReport(report)
     override suspend fun deleteReport(reportId: String): Result<Unit> = firestoreService.deleteReport(reportId)
+    override fun observeReports(): kotlinx.coroutines.flow.Flow<List<Report>> = firestoreService.observeReports()
+    override suspend fun seedHeatmapDemoData(): Result<Unit> = firestoreService.seedHeatmapDemoData()
 }

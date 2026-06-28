@@ -10,6 +10,8 @@ import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.Query
 import kotlinx.coroutines.tasks.await
+import kotlinx.coroutines.channels.awaitClose
+import kotlinx.coroutines.channels.awaitClose
 
 class FirestoreService {
 
@@ -46,8 +48,32 @@ class FirestoreService {
 
     suspend fun incrementUserReportCount(uid: String): Result<Unit> = runCatching {
         val db = firestore ?: throw Exception("Firestore is not initialized")
-        db.collection("users").document(uid)
-            .update("reportCount", FieldValue.increment(1)).await()
+        if (uid.contains("@")) {
+            val querySnapshot = db.collection("users").whereEqualTo("email", uid).get().await()
+            for (doc in querySnapshot.documents) {
+                doc.reference.update("reportCount", FieldValue.increment(1)).await()
+            }
+        } else {
+            val docRef = db.collection("users").document(uid)
+            try {
+                docRef.update("reportCount", FieldValue.increment(1)).await()
+            } catch (e: Exception) {
+                // If user document does not exist yet (e.g. sandbox/demo/anonymous mode), initialize it
+                val snapshot = docRef.get().await()
+                if (!snapshot.exists()) {
+                    val newUser = User(
+                        uid = uid,
+                        fullName = if (uid == "demo_user_id") "Demo Citizen" else "Active Citizen",
+                        email = if (uid == "demo_user_id") "demo@example.com" else "anonymous@example.com",
+                        createdAt = System.currentTimeMillis(),
+                        reportCount = 1
+                    )
+                    docRef.set(newUser).await()
+                } else {
+                    throw e
+                }
+            }
+        }
     }
 
     // --- Reports Collection Operations ---
@@ -64,7 +90,7 @@ class FirestoreService {
         
         // Increment reportCount for this user
         if (report.userId.isNotEmpty()) {
-            incrementUserReportCount(report.userId)
+            incrementUserReportCount(report.userId).getOrThrow()
         }
         
         finalReport.reportId
@@ -88,6 +114,26 @@ class FirestoreService {
         snapshot.toObjects(Report::class.java)
     }
 
+    fun observeReports(): kotlinx.coroutines.flow.Flow<List<Report>> = kotlinx.coroutines.flow.callbackFlow {
+        val db = firestore
+        if (db == null) {
+            close(Exception("Firestore is not initialized"))
+            return@callbackFlow
+        }
+        val subscription = db.collection("reports")
+            .orderBy("createdAt", com.google.firebase.firestore.Query.Direction.DESCENDING)
+            .addSnapshotListener { snapshot, error ->
+                if (error != null) {
+                    close(error)
+                    return@addSnapshotListener
+                }
+                if (snapshot != null) {
+                    trySend(snapshot.toObjects(Report::class.java))
+                }
+            }
+        awaitClose { subscription.remove() }
+    }
+
     suspend fun updateReport(report: Report): Result<Unit> = runCatching {
         val db = firestore ?: throw Exception("Firestore is not initialized")
         db.collection("reports").document(report.reportId).set(report).await()
@@ -100,8 +146,19 @@ class FirestoreService {
             val report = snapshot.toObject(Report::class.java)
             db.collection("reports").document(reportId).delete().await()
             if (report != null && report.userId.isNotEmpty()) {
-                db.collection("users").document(report.userId)
-                    .update("reportCount", FieldValue.increment(-1)).await()
+                if (report.userId.contains("@")) {
+                    val querySnapshot = db.collection("users").whereEqualTo("email", report.userId).get().await()
+                    for (doc in querySnapshot.documents) {
+                        doc.reference.update("reportCount", FieldValue.increment(-1)).await()
+                    }
+                } else {
+                    try {
+                        db.collection("users").document(report.userId)
+                            .update("reportCount", FieldValue.increment(-1)).await()
+                    } catch (e: Exception) {
+                        // Suppress if user document does not exist
+                    }
+                }
             }
         }
     }
@@ -244,9 +301,126 @@ class FirestoreService {
         list.sortedByDescending { it.createdAt }
     }
 
+    fun observeNotifications(userId: String): kotlinx.coroutines.flow.Flow<List<Notification>> = kotlinx.coroutines.flow.callbackFlow {
+        val db = firestore
+        if (db == null) {
+            close(Exception("Firestore is not initialized"))
+            return@callbackFlow
+        }
+        val subscription = db.collection("notifications")
+            .whereEqualTo("userId", userId)
+            .addSnapshotListener { snapshot, error ->
+                if (error != null) {
+                    close(error)
+                    return@addSnapshotListener
+                }
+                if (snapshot != null) {
+                    val list = snapshot.toObjects(Notification::class.java).sortedByDescending { it.createdAt }
+                    trySend(list)
+                }
+            }
+        awaitClose { subscription.remove() }
+    }
+
     suspend fun markNotificationAsRead(notificationId: String): Result<Unit> = runCatching {
         val db = firestore ?: throw Exception("Firestore is not initialized")
         db.collection("notifications").document(notificationId)
             .update("isRead", true).await()
+    }
+
+    suspend fun deleteNotification(notificationId: String): Result<Unit> = runCatching {
+        val db = firestore ?: throw Exception("Firestore is not initialized")
+        db.collection("notifications").document(notificationId).delete().await()
+    }
+
+    suspend fun seedHeatmapDemoData(): Result<Unit> = runCatching {
+        val db = firestore ?: throw Exception("Firestore is not initialized")
+        
+        val demoUsers = listOf(
+            User(
+                uid = "user_demo_1",
+                fullName = "Jane Doe",
+                email = "jane.doe@urbanpulse.org",
+                createdAt = System.currentTimeMillis(),
+                reportCount = 2
+            ),
+            User(
+                uid = "user_demo_2",
+                fullName = "John Smith",
+                email = "john.smith@urbanpulse.org",
+                createdAt = System.currentTimeMillis(),
+                reportCount = 1
+            ),
+            User(
+                uid = "user_demo_3",
+                fullName = "Sarah Jenkins",
+                email = "sarah.j@urbanpulse.org",
+                createdAt = System.currentTimeMillis(),
+                reportCount = 1
+            )
+        )
+        
+        for (user in demoUsers) {
+            db.collection("users").document(user.uid).set(user).await()
+        }
+        
+        val demoReports = listOf(
+            Report(
+                reportId = "report_demo_critical_1",
+                userId = "user_demo_1",
+                category = "Flooding",
+                description = "Severe water leakage blocking the intersection of Market St & 5th St.",
+                latitude = 37.7842,
+                longitude = -122.4075,
+                address = "Market St & 5th St, San Francisco, CA",
+                priority = "Critical",
+                status = "Pending",
+                voteCount = 15,
+                createdAt = System.currentTimeMillis() - 3600000
+            ),
+            Report(
+                reportId = "report_demo_high_1",
+                userId = "user_demo_2",
+                category = "Pothole",
+                description = "Deep road pothole on Mission St causing transit delays.",
+                latitude = 37.7785,
+                longitude = -122.4118,
+                address = "1012 Mission St, San Francisco, CA",
+                priority = "High",
+                status = "Reviewing",
+                voteCount = 8,
+                createdAt = System.currentTimeMillis() - 7200000
+            ),
+            Report(
+                reportId = "report_demo_medium_1",
+                userId = "user_demo_3",
+                category = "Broken Streetlight",
+                description = "Flickering streetlight outside the Civic Center Library.",
+                latitude = 37.7798,
+                longitude = -122.4172,
+                address = "Civic Center Plaza, San Francisco, CA",
+                priority = "Medium",
+                status = "Pending",
+                voteCount = 4,
+                createdAt = System.currentTimeMillis() - 10800000
+            ),
+            Report(
+                reportId = "report_demo_low_1",
+                userId = "user_demo_1",
+                category = "Garbage",
+                description = "Overfilled public trash bin on Valencia St.",
+                latitude = 37.7618,
+                longitude = -122.4215,
+                address = "792 Valencia St, San Francisco, CA",
+                priority = "Low",
+                status = "Fixed",
+                voteCount = 2,
+                createdAt = System.currentTimeMillis() - 14400000
+            )
+        )
+        
+        for (report in demoReports) {
+            db.collection("reports").document(report.reportId).set(report).await()
+        }
     }
 }

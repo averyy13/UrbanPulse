@@ -5,11 +5,13 @@ import com.example.model.Comment
 import com.example.model.Issue
 import com.example.model.Report
 import com.example.model.Vote
+import com.example.model.Notification
 import com.google.firebase.firestore.FirebaseFirestore
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.tasks.await
+import kotlinx.coroutines.launch
 
 interface IssueRepository {
     fun getIssues(): Flow<List<Issue>>
@@ -22,12 +24,14 @@ interface IssueRepository {
     suspend fun deleteComment(commentId: String, reportId: String): Result<Unit>
     suspend fun updateComment(comment: Comment): Result<Unit>
     suspend fun hasUserVoted(reportId: String, userId: String): Result<Boolean>
+    suspend fun seedHeatmapDemoData(): Result<Unit>
 }
 
 class IssueRepositoryImpl(
     private val reportRepo: ReportRepository = ReportRepositoryImpl(),
     private val commentRepo: CommentRepository = CommentRepositoryImpl(),
-    private val voteRepo: VoteRepository = VoteRepositoryImpl()
+    private val voteRepo: VoteRepository = VoteRepositoryImpl(),
+    private val notificationRepo: NotificationRepository = NotificationRepositoryImpl()
 ) : IssueRepository {
 
     private val firestore: FirebaseFirestore? by lazy {
@@ -45,30 +49,26 @@ class IssueRepositoryImpl(
         val db = firestore
         if (db != null) {
             try {
-                // Real-time observation of reports collection
-                db.collection("reports")
-                    .addSnapshotListener { snapshot, error ->
-                        if (error == null && snapshot != null) {
-                            val remoteReports = snapshot.toObjects(Report::class.java)
-                            if (remoteReports.isNotEmpty()) {
-                                val currentList = _localIssues.value
-                                // Map reports to Issues
-                                val mappedIssues = remoteReports.map { report ->
-                                    val existingIssue = currentList.find { it.id == report.reportId }
-                                    val mapped = report.toIssue()
-                                    if (existingIssue != null) {
-                                        mapped.copy(
-                                            comments = existingIssue.comments,
-                                            upvotedBy = existingIssue.upvotedBy
-                                        )
-                                    } else {
-                                        mapped
-                                    }
+                kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch {
+                    reportRepo.observeReports().collect { remoteReports ->
+                        if (remoteReports.isNotEmpty()) {
+                            val currentList = _localIssues.value
+                            val mappedIssues = remoteReports.map { report ->
+                                val existingIssue = currentList.find { it.id == report.reportId }
+                                val mapped = report.toIssue()
+                                if (existingIssue != null) {
+                                    mapped.copy(
+                                        comments = existingIssue.comments,
+                                        upvotedBy = existingIssue.upvotedBy
+                                    )
+                                } else {
+                                    mapped
                                 }
-                                _localIssues.value = mappedIssues
                             }
+                            _localIssues.value = mappedIssues
                         }
                     }
+                }
             } catch (e: Exception) {
                 // Ignore initialization failures in sandbox
             }
@@ -134,10 +134,28 @@ class IssueRepositoryImpl(
     }
 
     override suspend fun updateIssue(issue: Issue): Result<Unit> {
-        val updatedList = _localIssues.value.map { if (it.id == issue.id) issue else it }
+        val originalList = _localIssues.value
+        val oldIssue = originalList.find { it.id == issue.id }
+        
+        val updatedList = originalList.map { if (it.id == issue.id) issue else it }
         _localIssues.value = updatedList
+        
         try {
             reportRepo.updateReport(issue.toReport()).getOrThrow()
+            
+            // Check for status change
+            if (oldIssue != null && oldIssue.status != issue.status) {
+                // Send Notification to reporter
+                val notif = Notification(
+                    userId = issue.reporterId,
+                    title = "Status Update",
+                    message = "Your report '${issue.title}' status changed to '${issue.status}'.",
+                    type = "Status",
+                    createdAt = System.currentTimeMillis()
+                )
+                notificationRepo.createNotification(notif)
+            }
+            
             return Result.success(Unit)
         } catch (e: Exception) {
             Log.e("IssueRepository", "Firestore update failed, using local state: ${e.message}")
@@ -159,15 +177,20 @@ class IssueRepositoryImpl(
 
     override suspend fun upvoteIssue(issueId: String, userId: String): Result<Unit> {
         val originalList = _localIssues.value
+        var targetIssue: Issue? = null
         val updatedList = originalList.map { issue ->
             if (issue.id == issueId) {
                 val alreadyVoted = issue.upvotedBy.contains(userId)
                 val newUpvotedBy = if (alreadyVoted) issue.upvotedBy else issue.upvotedBy + userId
                 val newVotes = if (alreadyVoted) issue.votes else issue.votes + 1
-                issue.copy(
+                val updated = issue.copy(
                     upvotedBy = newUpvotedBy,
                     votes = newVotes
                 )
+                if (!alreadyVoted) {
+                    targetIssue = updated
+                }
+                updated
             } else {
                 issue
             }
@@ -176,6 +199,21 @@ class IssueRepositoryImpl(
 
         try {
             voteRepo.addVote(Vote(userId = userId, reportId = issueId)).getOrThrow()
+            
+            // Send Notification to reporter
+            targetIssue?.let { issue ->
+                if (issue.reporterId != userId) {
+                    val notif = Notification(
+                        userId = issue.reporterId,
+                        title = "New Upvote",
+                        message = "Your report '${issue.title}' received a new upvote.",
+                        type = "Upvote",
+                        createdAt = System.currentTimeMillis()
+                    )
+                    notificationRepo.createNotification(notif)
+                }
+            }
+            
             return Result.success(Unit)
         } catch (e: Exception) {
             Log.e("IssueRepository", "Firestore upvote failed, using local state: ${e.message}")
@@ -199,11 +237,16 @@ class IssueRepositoryImpl(
         )
 
         val originalList = _localIssues.value
+        var targetIssue: Issue? = null
         val updatedList = originalList.map { issue ->
             if (issue.id == issueId) {
                 val alreadyExists = issue.comments.any { it.id == normalizedComment.id }
                 val newComments = if (alreadyExists) issue.comments else issue.comments + normalizedComment
-                issue.copy(comments = newComments)
+                val updated = issue.copy(comments = newComments)
+                if (!alreadyExists) {
+                    targetIssue = updated
+                }
+                updated
             } else {
                 issue
             }
@@ -223,6 +266,21 @@ class IssueRepositoryImpl(
                 username = normalizedComment.username
             )
             commentRepo.addComment(firestoreComment).getOrThrow()
+            
+            // Send Notification to reporter
+            targetIssue?.let { issue ->
+                if (issue.reporterId != normalizedComment.userId) {
+                    val notif = Notification(
+                        userId = issue.reporterId,
+                        title = "New Comment",
+                        message = "${normalizedComment.username} commented on your report '${issue.title}'.",
+                        type = "Comment",
+                        createdAt = System.currentTimeMillis()
+                    )
+                    notificationRepo.createNotification(notif)
+                }
+            }
+            
             return Result.success(Unit)
         } catch (e: Exception) {
             Log.e("IssueRepository", "Firestore comment failed, using local state: ${e.message}")
@@ -300,6 +358,10 @@ class IssueRepositoryImpl(
         } catch (e: Exception) {
             Result.success(false)
         }
+    }
+
+    override suspend fun seedHeatmapDemoData(): Result<Unit> {
+        return reportRepo.seedHeatmapDemoData()
     }
 
     // --- Mapper Helpers ---
@@ -404,7 +466,7 @@ class IssueRepositoryImpl(
                 id = "issue_mock_2",
                 title = "Broken Streetlight",
                 description = "The main streetlight at the park entryway intersection is completely blacked out, making it very hazardous at night.",
-                category = "Light Out",
+                category = "Broken Streetlight",
                 latitude = 37.7833,
                 longitude = -122.4167,
                 imageUrl = "https://images.unsplash.com/photo-1509198397868-475647b2a1e5?auto=format&fit=crop&q=80&w=400",
@@ -419,9 +481,9 @@ class IssueRepositoryImpl(
             ),
             Issue(
                 id = "issue_mock_3",
-                title = "Illegal Toxic Waste Dump",
-                description = "Several canisters of paint and automotive fluid bottles dumped on the side of Greenway Park walking trail.",
-                category = "Waste",
+                title = "Illegal Garbage Accumulation",
+                description = "Several canisters of paint and garbage bags dumped on the side of Greenway Park walking trail.",
+                category = "Garbage",
                 latitude = 37.7694,
                 longitude = -122.4417,
                 imageUrl = "https://images.unsplash.com/photo-1611284446314-60a58ac0deb9?auto=format&fit=crop&q=80&w=400",
@@ -438,18 +500,52 @@ class IssueRepositoryImpl(
             ),
             Issue(
                 id = "issue_mock_4",
-                title = "Burst Water Pipeline",
-                description = "Fresh drinking water is gushing out from the sidewalk pavement constantly, flooding the local bicycle path.",
-                category = "Water Leak",
+                title = "Severe Street Flooding",
+                description = "Heavy rainfall has caused street water levels to rise rapidly, overflowing the curbs and flooding local driveways.",
+                category = "Flooding",
                 latitude = 37.7599,
                 longitude = -122.4367,
-                imageUrl = "https://images.unsplash.com/photo-1504328345606-18bbc8c9d7d1?auto=format&fit=crop&q=80&w=400",
+                imageUrl = "https://images.unsplash.com/photo-1547683905-f686c993aae5?auto=format&fit=crop&q=80&w=400",
                 status = "Pending",
                 reporterId = "reporter_mock_4",
                 reporterName = "Diana Prince",
                 timestamp = System.currentTimeMillis() - 172800000,
                 priorityScore = 3,
                 votes = 8,
+                upvotedBy = emptyList(),
+                comments = emptyList()
+            ),
+            Issue(
+                id = "issue_mock_5",
+                title = "Main Road Asphalt Cracks",
+                description = "The road surface here has collapsed with large cracks spreading across both lanes, posing a threat to motorcycles.",
+                category = "Road Damage",
+                latitude = 37.7643,
+                longitude = -122.4222,
+                imageUrl = "https://images.unsplash.com/photo-1621259182978-f09e5e2b07ae?auto=format&fit=crop&q=80&w=400",
+                status = "Pending",
+                reporterId = "reporter_mock_5",
+                reporterName = "Tony Stark",
+                timestamp = System.currentTimeMillis() - 120000000,
+                priorityScore = 2,
+                votes = 15,
+                upvotedBy = emptyList(),
+                comments = emptyList()
+            ),
+            Issue(
+                id = "issue_mock_6",
+                title = "Clogged Sewer Drain",
+                description = "Plastic waste and leaves have completely blocked the storm drain inlet, creating high water puddles whenever it rains.",
+                category = "Drainage Problem",
+                latitude = 37.7555,
+                longitude = -122.4288,
+                imageUrl = "https://images.unsplash.com/photo-1504328345606-18bbc8c9d7d1?auto=format&fit=crop&q=80&w=400",
+                status = "Reviewing",
+                reporterId = "reporter_mock_6",
+                reporterName = "Bruce Wayne",
+                timestamp = System.currentTimeMillis() - 60000000,
+                priorityScore = 2,
+                votes = 9,
                 upvotedBy = emptyList(),
                 comments = emptyList()
             )

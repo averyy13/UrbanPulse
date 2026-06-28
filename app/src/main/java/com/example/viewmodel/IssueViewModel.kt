@@ -34,6 +34,7 @@ class IssueViewModel(
     private fun loadIssues() {
         viewModelScope.launch {
             repository.getIssues().collect { result ->
+                com.example.services.RealtimeNotificationService.trackIssues(result)
                 _issues.value = result
                 val currentSelected = _selectedIssue.value
                 if (currentSelected != null) {
@@ -131,6 +132,15 @@ class IssueViewModel(
         viewModelScope.launch {
             val result = repository.hasUserVoted(reportId, userId).getOrDefault(false)
             onResult(result)
+        }
+    }
+
+    fun seedHeatmapDemoData(onComplete: (Result<Unit>) -> Unit) {
+        viewModelScope.launch {
+            _isUploading.value = true
+            val result = repository.seedHeatmapDemoData()
+            _isUploading.value = false
+            onComplete(result)
         }
     }
 

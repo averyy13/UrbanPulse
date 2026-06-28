@@ -42,7 +42,16 @@ fun MyReportsScreen(
         "anonymous"
     }
 
-    val myReports = issues.filter { it.reporterId.equals(currentUserEmail, ignoreCase = true) }
+    val currentUserId = if (authState is AuthState.Success) {
+        (authState as AuthState.Success).uid
+    } else {
+        "anonymous"
+    }
+
+    val myReports = issues.filter { 
+        it.reporterId.equals(currentUserEmail, ignoreCase = true) || 
+        it.reporterId.equals(currentUserId, ignoreCase = true)
+    }
 
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
